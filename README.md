@@ -1,0 +1,2 @@
+# SimuIdleHunter
+Simulation Idle Hunter
