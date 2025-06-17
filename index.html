@@ -249,24 +249,89 @@
                 this.height = 60;
                 this.color = color;
                 this.name = name;
+                this.isFallen = false;
+                this.standingUpTimer = 0;
+                this.standingUpDuration = 3.5; // 3.5 seconds to stand up
+                this.fallThreshold = 120; // Velocity threshold to fall
+                this.rotation = 0; // Current rotation angle
+                this.targetRotation = 0; // Target rotation when falling/standing
             }
             
             update(deltaTime) {
-                super.update(deltaTime);
+                if (!this.isAlive || !gameStarted) return;
+                
+                // Check if should fall based on velocity
+                const velocityMagnitude = Math.sqrt(this.velocity.x ** 2 + this.velocity.y ** 2);
+                if (!this.isFallen && velocityMagnitude > this.fallThreshold) {
+                    this.isFallen = true;
+                    this.standingUpTimer = 0;
+                    this.targetRotation = Math.PI / 2; // 90 degrees (fallen)
+                }
+                
+                // Handle fallen state
+                if (this.isFallen) {
+                    this.standingUpTimer += deltaTime;
+                    
+                    // Reduce velocity while fallen
+                    this.velocity = this.velocity.multiply(0.2);
+                    
+                    // Stand up after timer
+                    if (this.standingUpTimer >= this.standingUpDuration) {
+                        this.isFallen = false;
+                        this.standingUpTimer = 0;
+                        this.targetRotation = 0; // Standing upright
+                    }
+                    
+                    // Apply minimal movement while fallen
+                    this.position = this.position.add(this.velocity.multiply(deltaTime * 0.3));
+                } else {
+                    // Normal movement when standing
+                    super.update(deltaTime);
+                }
+                
+                // Smooth rotation animation
+                const rotationSpeed = 8; // Speed of rotation animation
+                if (Math.abs(this.rotation - this.targetRotation) > 0.1) {
+                    const rotationDiff = this.targetRotation - this.rotation;
+                    this.rotation += rotationDiff * rotationSpeed * deltaTime;
+                } else {
+                    this.rotation = this.targetRotation;
+                }
+                
                 this.position.y = GROUND_Y - this.height; // Always on ground
+            }
+            
+            canAttack() {
+                return !this.isFallen && gameStarted && Date.now() - this.lastAttackTime > (1000 / this.attackSpeed);
             }
             
             render(ctx, camera) {
                 if (!this.isAlive) return;
                 
-                // Simple flat rectangle
-                ctx.fillStyle = this.color;
-                ctx.fillRect(this.position.x, this.position.y, this.width, this.height);
+                ctx.save();
                 
-                // Simple border
+                // Calculate render position based on rotation
+                let renderX = this.position.x + this.width/2;
+                let renderY = this.position.y + this.height/2;
+                
+                // If fallen, adjust position so it lies flat on ground
+                if (this.isFallen || this.rotation > 0.1) {
+                    renderY = GROUND_Y - this.width/2; // Adjust for rotated height
+                }
+                
+                ctx.translate(renderX, renderY);
+                ctx.rotate(this.rotation);
+                
+                // Draw rectangle (centered on rotation point)
+                ctx.fillStyle = this.color;
+                ctx.fillRect(-this.width/2, -this.height/2, this.width, this.height);
+                
+                // Border
                 ctx.strokeStyle = 'rgba(0,0,0,0.2)';
                 ctx.lineWidth = 2;
-                ctx.strokeRect(this.position.x, this.position.y, this.width, this.height);
+                ctx.strokeRect(-this.width/2, -this.height/2, this.width, this.height);
+                
+                ctx.restore();
             }
         }
         
@@ -300,12 +365,12 @@
                         this.velocity = direction.multiply(this.returnSpeed * 2); // Return faster after attack
                     }
                 } else {
-                    // Find closest rectangle
+                    // Find closest standing rectangle (ignore fallen ones)
                     let closestRect = null;
                     let closestDistance = Infinity;
                     
                     rectangles.forEach(rect => {
-                        if (rect.isAlive) {
+                        if (rect.isAlive && !rect.isFallen) { // Only target standing rectangles
                             const distance = this.position.distance(rect.position);
                             if (distance < closestDistance) {
                                 closestDistance = distance;
@@ -319,9 +384,9 @@
                         closestRect.takeDamage(this.attack);
                         this.lastAttackTime = Date.now();
                         
-                        // Push the rectangle
+                        // Push the rectangle (reduced force but enough to make them fall)
                         const direction = closestRect.position.subtract(this.position).normalize();
-                        const pushDirection = direction.multiply(200);
+                        const pushDirection = direction.multiply(140); // Reduced from 200 to 140
                         closestRect.velocity = closestRect.velocity.add(pushDirection);
                         
                         // Set flag to return immediately after attack
@@ -437,64 +502,12 @@
             }
             
             update() {
-                // Get bounds of all current positions AND original positions
-                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                // Disable zoom - keep at 1x
+                this.zoom = 1;
                 
-                // Check current positions
-                [...rectangles, circle].forEach(entity => {
-                    if (entity.isAlive) {
-                        minX = Math.min(minX, entity.position.x - 40);
-                        minY = Math.min(minY, entity.position.y - 40);
-                        maxX = Math.max(maxX, entity.position.x + 40);
-                        maxY = Math.max(maxY, entity.position.y + 40);
-                    }
-                });
-                
-                // Check original positions (always include these)
-                [...rectangles, circle].forEach(entity => {
-                    minX = Math.min(minX, entity.originalPosition.x - 40);
-                    minY = Math.min(minY, entity.originalPosition.y - 40);
-                    maxX = Math.max(maxX, entity.originalPosition.x + 40);
-                    maxY = Math.max(maxY, entity.originalPosition.y + 40);
-                });
-                
-                // Include trees (static landmarks)
-                trees.forEach(tree => {
-                    minX = Math.min(minX, tree.x - 15);
-                    minY = Math.min(minY, tree.y - 20);
-                    maxX = Math.max(maxX, tree.x + 15);
-                    maxY = Math.max(maxY, tree.y + 20);
-                });
-                
-                // Include projectiles
-                projectiles.forEach(proj => {
-                    if (proj.isAlive) {
-                        minX = Math.min(minX, proj.position.x - 10);
-                        minY = Math.min(minY, proj.position.y - 10);
-                        maxX = Math.max(maxX, proj.position.x + 10);
-                        maxY = Math.max(maxY, proj.position.y + 10);
-                    }
-                });
-                
-                // Add padding
-                const padding = 50;
-                minX -= padding;
-                minY -= padding;
-                maxX += padding;
-                maxY += padding;
-                
-                // Calculate required zoom
-                const worldWidth = maxX - minX;
-                const worldHeight = maxY - minY;
-                const zoomX = canvas.width / worldWidth;
-                const zoomY = canvas.height / worldHeight;
-                this.zoom = Math.min(zoomX, zoomY, 1.2); // Cap zoom
-                
-                // Center the view
-                const centerX = (minX + maxX) / 2;
-                const centerY = (minY + maxY) / 2;
-                this.offset.x = canvas.width / 2 - centerX * this.zoom;
-                this.offset.y = canvas.height / 2 - centerY * this.zoom;
+                // Simple centering without zoom calculations
+                this.offset.x = 0;
+                this.offset.y = 0;
             }
             
             worldToScreen(worldPos) {
@@ -605,6 +618,10 @@
                 rect.isAlive = true;
                 rect.position = new Vector2(rect.originalPosition.x, rect.originalPosition.y);
                 rect.velocity = new Vector2(0, 0);
+                rect.isFallen = false;
+                rect.standingUpTimer = 0;
+                rect.rotation = 0;
+                rect.targetRotation = 0;
             });
             
             circle.hp = circle.maxHp;
